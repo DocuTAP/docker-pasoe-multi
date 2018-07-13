@@ -1,0 +1,42 @@
+# Ruby CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-ruby/ for more details
+version: 2
+jobs:
+  build:
+    docker:
+      - image: docker:18.05.0-ce-git
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Install Dependencies
+          command: |
+            apk update
+            apk --no-cache add py-pip curl bash
+            apk upgrade
+            pip install --upgrade pip
+            pip install awscli docker-squash==1.0.5
+      - run:
+          name: Install git-lfs support
+          command: |
+            curl -sLO https://github.com/git-lfs/git-lfs/releases/download/v2.4.0/git-lfs-linux-amd64-2.4.0.tar.gz
+            tar -zxvf git-lfs-linux-amd64-2.4.0.tar.gz
+            mv git-lfs-2.4.0/git-lfs /usr/bin/
+            rm -rf git-lfs-2.4.0 git-lfs-linux-amd64-2.4.0.tar.gz
+      - run:
+          name: Build Base Image
+          command: |
+            login="$(aws ecr get-login --region us-east-1 --no-include-email)"
+            ${login}
+
+            /bin/bash ./build.sh
+      - run:
+          name: Check-In Updated Dockerfile
+          command: |
+            /bin/sh ./scripts/check_in_updated_dockerfile.sh
+      - run:
+          name: Trigger Downstream Build
+          command: |
+            /bin/sh ./scripts/trigger_downstream_build.sh
+
