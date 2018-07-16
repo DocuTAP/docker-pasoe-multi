@@ -13,30 +13,33 @@ jobs:
           name: Install Dependencies
           command: |
             apk update
-            apk --no-cache add py-pip curl bash
+            apk --no-cache add py-pip curl bash openrc haveged
             apk upgrade
             pip install --upgrade pip
             pip install awscli docker-squash==1.0.5
       - run:
-          name: Install git-lfs support
+          name: Log into ECR
           command: |
-            curl -sLO https://github.com/git-lfs/git-lfs/releases/download/v2.4.0/git-lfs-linux-amd64-2.4.0.tar.gz
-            tar -zxvf git-lfs-linux-amd64-2.4.0.tar.gz
-            mv git-lfs-2.4.0/git-lfs /usr/bin/
-            rm -rf git-lfs-2.4.0 git-lfs-linux-amd64-2.4.0.tar.gz
+              eval $(aws ecr get-login --region us-east-1 --no-include-email)
+      - run:
+          name: Download artifacts from S3
+          command: |
+              aws s3 cp s3://release-phi-docutap/progress-artifacts/PROGRESS_OE_11.7.3_LNX_64_UPDATE.tar.gz ./docker/.
       - run:
           name: Build Base Image
+          no_output_timeout: 2h
           command: |
-            login="$(aws ecr get-login --region us-east-1 --no-include-email)"
-            ${login}
-
             /bin/bash ./build.sh
-      - run:
-          name: Check-In Updated Dockerfile
+      - deploy:
+          name: Push application Docker image
           command: |
-            /bin/sh ./scripts/check_in_updated_dockerfile.sh
-      - run:
-          name: Trigger Downstream Build
-          command: |
-            /bin/sh ./scripts/trigger_downstream_build.sh
+            # Tag and push only on develop
+            if [[ $CIRCLE_BRANCH == "develop" ]]; then
+              echo "Squashing image..."
+              docker-squash -t squashed-image $(docker image ls -q app | head -1)
+              docker tag squashed-image "${ECR_ENDPOINT}/progress-web-api-base:develop"
+              docker tag squashed-image "${ECR_ENDPOINT}/progress-web-api-base:${CIRCLE_BUILD_NUM}"
 
+              docker push "${ECR_ENDPOINT}/progress-web-api-base:develop"
+              docker push "${ECR_ENDPOINT}/progress-web-api-base:${CIRCLE_BUILD_NUM}"
+            fi
