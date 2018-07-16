@@ -11,8 +11,8 @@
 ##
 FROM debian:stretch-slim as oebase
 
-ARG INSTURI
-ARG PKGURI
+ARG INSTALL_INI_SCRIPT
+ARG TAR_PACKAGE
 
 ############################################################
 # Speedup DPKG and don't use cache for packages
@@ -81,19 +81,17 @@ ENV OEVER="11.7.3" \
     PAS_PORT_SHUT="-1" \
     PAS_PORT_AJP="8009"
 
+COPY ${INSTALL_INI_SCRIPT} /tmp/.
+ADD ${TAR_PACKAGE} /tmp/.
+
+
 RUN set -e \
     && cd /tmp; mkdir -p oeinst \
     ##
-    # Get Install Script: response.ini
-    ##
-    && ( echo "Retrieving Install Script: ${INSTURI} -> /tmp/response.ini ..."; \
-         curl -s ${INSTURI} -o response.ini \
-       ) \
-    ##
     # Get Product Package
     ##    
-    && ( echo "Downloading and Extracting files ${PKGURI} -> /tmp/oeinst ..."; \
-         curl -s ${PKGURI} | tar xz -C oeinst \
+    && ( echo "Extracting files ${TAR_PACKAGE} -> /tmp/oeinst ..."; \
+            tar -xzf ${TAR_PACKAGE} -C oeinst \
        ) \
     && echo "Starting OE Install with: " \
 	        "DLC=${DLC}" \
@@ -104,7 +102,7 @@ RUN set -e \
     # tailor the installer file
     #
     (   echo "Tailoring install file ... "; \
-        envsubst < response.ini > instresponse.ini \
+        envsubst < ${INSTALL_INI_SCRIPT} > instresponse.ini \
     ) \
     #
     # start install
@@ -148,138 +146,138 @@ RUN set -e \
     ##
     echo "Completed OE install: " && cat $DLC/version;
 
-##
-# TODO: download and install su-exec in oebase vs COPY.
-#       .sh scripts can be part of download package (eg. git clone)
-#       OR FROM owlab/alpine-su-exec as suexe
-##
-COPY su-exec /usr/local/bin/
-COPY docker-entrypoint.sh /
-
-# setup permissions
-RUN set -e;  \
-    chmod a+x /usr/local/bin/su-exec; \
-    chmod a+x /docker-entrypoint.sh;
-
-#------------- Begin RUNTIME multi-stage build ---------------#
-# saves @ 10MB in size for OEPASPROD configuration vs mulit-dockerfile build
-
-FROM debian:stretch-slim
-
-COPY --from=oebase /usr/dlc/ /usr/dlc/
-COPY --from=oebase /bin/busybox /bin/busybox
-COPY --from=oebase /usr/bin/dumb-init /usr/bin/dumb-init
-COPY --from=oebase /usr/local/bin/su-exec /usr/local/bin/su-exec
-COPY --from=oebase /docker-entrypoint.sh /
-
-##
-# NB: various compression techniques will clear environment variables
-#     from the prepared image.  It may be beneficial to define variables
-#     elsewhere downstream.
-##
-
-# RUNTIME VARS : would be nice to be able to 'share' these between contexts
-ENV OEVER="11.7.3" \
-    DLC="/usr/dlc" \
-    WRKDIR="/usr/wrk_dlc" \
-    OEM="/usr/oemgmt" \
-    OEMWRKDIR="/usr/wrk_oemgmt" \
-    BPMSERVER_BIN="/usr/dlc/oebpm/server/bin"
-
-# the PAS_PORT* do NOT have to match the install values.
-# the values here can be used to override the install defaults
-ENV PAS_PORT_HTTP="8080" \
-    PAS_PORT_HTTPS="8443" \
-    PAS_PORT_SHUT="-1" \
-    PAS_PORT_AJP="8009" \
-    PAS_ROOT="/opt/pas" \
-    PAS_INST="pasoe" \
-    OEUSER="oeuser" \
-    OEUSER_UID="1000" \
-    OEUSER_GID="1000"
-
-RUN set -e; \
-    { echo '#!/bin/sh\nls -AlF --color=auto $@'; } >> /usr/local/bin/ll \
-    && chmod a+x /usr/local/bin/ll \
-    # update alternatives fixes $DLC/servers/pasoe/bin/tcmanager.sh *issue*
-    && { \
-        update-alternatives --install /bin/sh sh /bin/bash 100; \
-        update-alternatives --install /bin/sh sh /bin/dash 200; \
-        update-alternatives --set sh /bin/bash; \
-    } \
-    #
-    # setup busybox links : need them ALL?
-    # 
-    && /bin/busybox --install -s \
-    #
-    # Add OE user
-    && addgroup --gid ${OEUSER_GID} ${OEUSER} \
-    && adduser --uid ${OEUSER_UID} --gid ${OEUSER_GID} --disabled-password \
-               --gecos GECOS --home /home/${OEUSER} --shell /bin/bash ${OEUSER} \
-    ##
-    # create PAS_ROOT
-    ##
-    && mkdir -p ${PAS_ROOT} && touch ${PAS_ROOT}/.placeholder \
-    #
-    # consider: chacl on PAS_ROOT
-    #
-    && chown -R ${OEUSER}:${OEUSER} /home/${OEUSER} \
-    && chown -R ${OEUSER}:${OEUSER} ${PAS_ROOT} \
-    ;    
-
-## Setup Java environment: entrypoint could source $DLC/bin/java_env
-ENV JVMEXE="java" \
-    THREADS_FLAG="native" \
-    JREHOME="${DLC}/jdk/jre" \
-    JDKHOME="${DLC}/jdk" \
-    JAVAHOME="${DLC}/jdk" \
-    JVM="${DLC}/jdk/jre/bin/java"
-
-ENV PASINSTPATH=${PAS_ROOT}/${PAS_INST}
-
-ENV LD_LIBRARY_PATH="${JREHOME}/lib/amd64:${JREHOME}/lib/amd64/native_threads:${JREHOME}/bin:${JREHOME}/lib/amd64/server:" \
-    PROLIBPATH="${JREHOME}/lib/amd64:${JREHOME}/lib/amd64/native_threads:${JREHOME}/bin:${JREHOME}/lib/amd64/server:" \
-    PATH="$DLC/bin:${BPMSERVER_BIN}:$DLC/perl/bin:$PATH"
-
-# Expose our known/default ports: these can be re-mapped or overridden later-on
-# !! DO NOT EXPOSE THE PAS_PORT_SHUT
-#      http             https              ajp
-EXPOSE ${PAS_PORT_HTTP} ${PAS_PORT_HTTPS}  ${PAS_PORT_AJP}
-
-# May want to define the PAS ROOT directory as a volume since there is 
-# mutable state therein
-# VOLUME ${PAS_ROOT}
-WORKDIR ${PAS_ROOT} 
-
-# provision PASOE 
-#   : import DLC TLS certs
-#   : create instance
-#   : import and update TC TLS certs
-# not performing during build would reduce image size, but increase container init overhead
-# for PROD PASOE (default):
-#    root must be used to run create
-#    11.7.3 -U option causes oeabl_tailor.sh to fail 
-#        -- chmod manually  OR
-#        -- use su-exec
-RUN set -e; \
-    echo "Creating PAS Instance at: ${PASINSTPATH}"; \
-    $DLC/bin/pasman create -v -N ${PAS_INST} ${PASINSTPATH}  \
-    #find ${PASINSTPATH} -depth -type d -exec chown ${OEUSER}:${OEUSER} "{}" \; \
-    #find ${PASINSTPATH} -depth -type f -exec chown ${OEUSER}:${OEUSER} "{}" \; \
-    ;
-
-# Make the log folder a volume
-VOLUME [ ${PASINSTPATH}/logs ]
-
-# Run the container as a non-root user for sanity/safety
-# though: PROD PASOE needs root to do anything
-# if not setting non-ROOT user, be sure to use su-exec(or similar) to control
-# privilege execution in ENTRYPOINT
-# USER ${OEUSER}
-
-# allowing docker-entrypoint to use /bin/bash
-# ENTRYPOINT and CMD are only used during container start
-ENTRYPOINT [ "/usr/bin/dumb-init", "--", "/docker-entrypoint.sh" ]
-CMD [ "start" ]
+  ##
+  # TODO: download and install su-exec in oebase vs COPY.
+  #       .sh scripts can be part of download package (eg. git clone)
+  #       OR FROM owlab/alpine-su-exec as suexe
+  ##
+  COPY su-exec /usr/local/bin/
+  COPY docker-entrypoint.sh /
+  
+  # setup permissions
+  RUN set -e;  \
+      chmod a+x /usr/local/bin/su-exec; \
+      chmod a+x /docker-entrypoint.sh;
+  
+  #------------- Begin RUNTIME multi-stage build ---------------#
+  # saves @ 10MB in size for OEPASPROD configuration vs mulit-dockerfile build
+  
+  FROM debian:stretch-slim
+  
+  COPY --from=oebase /usr/dlc/ /usr/dlc/
+  COPY --from=oebase /bin/busybox /bin/busybox
+  COPY --from=oebase /usr/bin/dumb-init /usr/bin/dumb-init
+  COPY --from=oebase /usr/local/bin/su-exec /usr/local/bin/su-exec
+  COPY --from=oebase /docker-entrypoint.sh /
+  
+  ##
+  # NB: various compression techniques will clear environment variables
+  #     from the prepared image.  It may be beneficial to define variables
+  #     elsewhere downstream.
+  ##
+  
+  # RUNTIME VARS : would be nice to be able to 'share' these between contexts
+  ENV OEVER="11.7.3" \
+      DLC="/usr/dlc" \
+      WRKDIR="/usr/wrk_dlc" \
+      OEM="/usr/oemgmt" \
+      OEMWRKDIR="/usr/wrk_oemgmt" \
+      BPMSERVER_BIN="/usr/dlc/oebpm/server/bin"
+  
+  # the PAS_PORT* do NOT have to match the install values.
+  # the values here can be used to override the install defaults
+  ENV PAS_PORT_HTTP="8080" \
+      PAS_PORT_HTTPS="8443" \
+      PAS_PORT_SHUT="-1" \
+      PAS_PORT_AJP="8009" \
+      PAS_ROOT="/opt/pas" \
+      PAS_INST="pasoe" \
+      OEUSER="oeuser" \
+      OEUSER_UID="1000" \
+      OEUSER_GID="1000"
+  
+  RUN set -e; \
+      { echo '#!/bin/sh\nls -AlF --color=auto $@'; } >> /usr/local/bin/ll \
+      && chmod a+x /usr/local/bin/ll \
+      # update alternatives fixes $DLC/servers/pasoe/bin/tcmanager.sh *issue*
+      && { \
+          update-alternatives --install /bin/sh sh /bin/bash 100; \
+          update-alternatives --install /bin/sh sh /bin/dash 200; \
+          update-alternatives --set sh /bin/bash; \
+      } \
+      #
+      # setup busybox links : need them ALL?
+      # 
+      && /bin/busybox --install -s \
+      #
+      # Add OE user
+      && addgroup --gid ${OEUSER_GID} ${OEUSER} \
+      && adduser --uid ${OEUSER_UID} --gid ${OEUSER_GID} --disabled-password \
+                 --gecos GECOS --home /home/${OEUSER} --shell /bin/bash ${OEUSER} \
+      ##
+      # create PAS_ROOT
+      ##
+      && mkdir -p ${PAS_ROOT} && touch ${PAS_ROOT}/.placeholder \
+      #
+      # consider: chacl on PAS_ROOT
+      #
+      && chown -R ${OEUSER}:${OEUSER} /home/${OEUSER} \
+      && chown -R ${OEUSER}:${OEUSER} ${PAS_ROOT} \
+      ;    
+  
+  ## Setup Java environment: entrypoint could source $DLC/bin/java_env
+  ENV JVMEXE="java" \
+      THREADS_FLAG="native" \
+      JREHOME="${DLC}/jdk/jre" \
+      JDKHOME="${DLC}/jdk" \
+      JAVAHOME="${DLC}/jdk" \
+      JVM="${DLC}/jdk/jre/bin/java"
+  
+  ENV PASINSTPATH=${PAS_ROOT}/${PAS_INST}
+  
+  ENV LD_LIBRARY_PATH="${JREHOME}/lib/amd64:${JREHOME}/lib/amd64/native_threads:${JREHOME}/bin:${JREHOME}/lib/amd64/server:" \
+      PROLIBPATH="${JREHOME}/lib/amd64:${JREHOME}/lib/amd64/native_threads:${JREHOME}/bin:${JREHOME}/lib/amd64/server:" \
+      PATH="$DLC/bin:${BPMSERVER_BIN}:$DLC/perl/bin:$PATH"
+  
+  # Expose our known/default ports: these can be re-mapped or overridden later-on
+  # !! DO NOT EXPOSE THE PAS_PORT_SHUT
+  #      http             https              ajp
+  EXPOSE ${PAS_PORT_HTTP} ${PAS_PORT_HTTPS}  ${PAS_PORT_AJP}
+  
+  # May want to define the PAS ROOT directory as a volume since there is 
+  # mutable state therein
+  # VOLUME ${PAS_ROOT}
+  WORKDIR ${PAS_ROOT} 
+  
+  # provision PASOE 
+  #   : import DLC TLS certs
+  #   : create instance
+  #   : import and update TC TLS certs
+  # not performing during build would reduce image size, but increase container init overhead
+  # for PROD PASOE (default):
+  #    root must be used to run create
+  #    11.7.3 -U option causes oeabl_tailor.sh to fail 
+  #        -- chmod manually  OR
+  #        -- use su-exec
+  RUN set -e; \
+      echo "Creating PAS Instance at: ${PASINSTPATH}"; \
+      $DLC/bin/pasman create -v -N ${PAS_INST} ${PASINSTPATH}  \
+      #find ${PASINSTPATH} -depth -type d -exec chown ${OEUSER}:${OEUSER} "{}" \; \
+      #find ${PASINSTPATH} -depth -type f -exec chown ${OEUSER}:${OEUSER} "{}" \; \
+      ;
+  
+  # Make the log folder a volume
+  VOLUME [ ${PASINSTPATH}/logs ]
+  
+  # Run the container as a non-root user for sanity/safety
+  # though: PROD PASOE needs root to do anything
+  # if not setting non-ROOT user, be sure to use su-exec(or similar) to control
+  # privilege execution in ENTRYPOINT
+  # USER ${OEUSER}
+  
+  # allowing docker-entrypoint to use /bin/bash
+  # ENTRYPOINT and CMD are only used during container start
+  ENTRYPOINT [ "/usr/bin/dumb-init", "--", "/docker-entrypoint.sh" ]
+  CMD [ "start" ]
 
 #EOF
