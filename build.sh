@@ -17,7 +17,7 @@ set -e
 # Label and vers for project image
 declare -a VERS
 
-LABEL="pscservices/pasoeprod"
+LABEL="pscservices/pasoedbprod"
 VERS=( 11.7.3 latest )
 TARBALL_FILE="PROGRESS_OE_11.7.3_LNX_64_UPDATE.tar.gz"
 
