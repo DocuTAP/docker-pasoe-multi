@@ -11,9 +11,6 @@
 ##
 FROM debian:stretch-slim as oebase
 
-ARG INSTURI
-ARG PKGURI
-
 ############################################################
 # Speedup DPKG and don't use cache for packages
 ############################################################
