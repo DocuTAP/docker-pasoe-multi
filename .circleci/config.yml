@@ -1,0 +1,43 @@
+# Ruby CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-ruby/ for more details
+version: 2
+jobs:
+  build:
+    machine: true 
+    steps:
+      - checkout
+      -  run:
+           name: Install Dependencies
+           command: |
+             sudo apt update
+             sudo apt install python-pip curl bash  haveged
+             sudo apt upgrade
+             pip install --upgrade pip
+             pip install awscli docker-squash==1.0.5
+      -  run:
+           name: Log into ECR
+           command: |
+               eval $(aws ecr get-login --region us-east-1 --no-include-email)
+      -  run:
+           name: Download artifacts from S3
+           command: |
+               aws s3 cp s3://release-phi-docutap/progress-artifacts/PROGRESS_OE_11.7.3_LNX_64_UPDATE.tar.gz ./docker/.
+      -  run:
+           name: Build Base Image
+           no_output_timeout: 30m 
+           command: |
+             /bin/bash ./build.sh
+      -  deploy:
+           name: Push application Docker image
+           command: |
+             # Tag and push only on develop
+             if [[ $CIRCLE_BRANCH == "develop" ]]; then
+               echo "Squashing image..."
+               docker-squash -t squashed-image $(docker image ls -q app | head -1)
+               docker tag squashed-image "${ECR_ENDPOINT}/progress-web-api-base:develop"
+               docker tag squashed-image "${ECR_ENDPOINT}/progress-web-api-base:${CIRCLE_BUILD_NUM}"
+      
+               docker push "${ECR_ENDPOINT}/progress-web-api-base:develop"
+               docker push "${ECR_ENDPOINT}/progress-web-api-base:${CIRCLE_BUILD_NUM}"
+             fi

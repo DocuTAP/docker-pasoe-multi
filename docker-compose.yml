@@ -5,9 +5,9 @@ services:
     # match the image name to the LABEL and VERS vars in build.sh
     image: "pscservices/pasoeprod:11.7.3"
     expose: 
-      - "8080"
-      - "8443"
-      - "8009"
+      - "8088"
+      - "8089"
+      - "8090"
     #volumes:
       # runtime volume mount your license file
       #- "<pathto>/prod_11.7.3_pasoe_progress.cfg:/usr/dlc/progress.cfg:ro"
